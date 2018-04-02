@@ -15,11 +15,12 @@
 package iotest
 
 import (
+	"bytes"
 	"io/ioutil"
 	"testing"
 )
 
-func TestRWS(t *testing.T) {
+func TestTester(t *testing.T) {
 	f1, err := ioutil.TempFile("", "iotest")
 	if err != nil {
 		t.Fatal(err)
@@ -28,6 +29,15 @@ func TestRWS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ft := &FileTester{T: t, F1: f1, F2: f2}
+	ft := &Tester{T: t, F1: f1, F2: f2}
+	ft.Run()
+}
+
+func TestBuffer(t *testing.T) {
+	ft := &Tester{
+		T:  t,
+		F1: new(bytes.Buffer),
+		F2: new(bytes.Buffer),
+	}
 	ft.Run()
 }
