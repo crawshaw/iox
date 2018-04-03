@@ -1,3 +1,3 @@
-# Testing tools for Go I/O objects.
+# Package iox contains Go I/O utilities.
 
-https://godoc.org/crawshaw.io/iotest
+https://godoc.org/crawshaw.io/iox
