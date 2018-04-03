@@ -12,7 +12,7 @@
 // ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 // OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
-package iotest // import "crawshaw.io/iotest"
+package ioxtest // import "crawshaw.io/iox/ioxtest"
 
 import (
 	"bytes"
