@@ -19,8 +19,12 @@ import (
 	"crypto/sha1"
 	"io"
 	"math/rand"
+	"runtime/debug"
 	"testing"
 )
+
+// TODO: rearrange operations into a generated table for minimization
+// See github.com/dgryski/go-ddmin.
 
 // Tester compares the I/O behavior of F1 and F2.
 //
@@ -43,6 +47,8 @@ type Tester struct {
 	Rand      *rand.Rand
 	MaxSize   int
 	NumEvents int
+
+	off, len int64
 }
 
 func (ft *Tester) Run() {
@@ -79,7 +85,14 @@ func (ft *Tester) Run() {
 			break
 		}
 		fn := tasks[ft.Rand.Intn(len(tasks))]
-		fn()
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					ft.T.Errorf("task paniced (off=%d, len=%d): %s", ft.off, ft.len, debug.Stack())
+				}
+			}()
+			fn()
+		}()
 	}
 
 	if !ft.T.Failed() {
@@ -87,12 +100,13 @@ func (ft *Tester) Run() {
 	}
 
 	if c1, ok := ft.F1.(io.Closer); ok {
-		c2 := ft.F2.(io.Closer)
-		err1 := c1.Close()
-		err2 := c2.Close()
+		if c2, ok := ft.F2.(io.Closer); ok {
+			err1 := c1.Close()
+			err2 := c2.Close()
 
-		if (err1 == nil && err2 != nil) || (err1 != nil && err2 == nil) {
-			ft.T.Errorf("Close err=%v, want %v", err1, err2)
+			if (err1 == nil && err2 != nil) || (err1 != nil && err2 == nil) {
+				ft.T.Errorf("Close err=%v, want %v", err1, err2)
+			}
 		}
 	}
 }
@@ -136,15 +150,21 @@ func (ft *Tester) read(r1, r2 io.Reader) {
 	b1 := make([]byte, ft.Rand.Intn(ft.MaxSize))
 	b2 := make([]byte, len(b1))
 
-	steps := 0
+	var steps int
 	var n1 int
 	var err1 error
+	defer func() {
+		ft.T.Logf("Read(make([]byte, %d)) n=%d, err=%v in %d steps", len(b1), n1, err1, steps)
+	}()
+
 	for n1 < len(b1) && err1 == nil {
 		var nn int
 		nn, err1 = r1.Read(b1[n1:])
 		n1 += nn
 		steps++
 	}
+
+	ft.off += int64(n1)
 
 	var n2 int
 	var err2 error
@@ -153,8 +173,6 @@ func (ft *Tester) read(r1, r2 io.Reader) {
 		nn, err2 = r2.Read(b2[n2:])
 		n2 += nn
 	}
-
-	ft.T.Logf("Read(make([]byte, %d)) n=%d, err=%v in %d steps", len(b1), n1, err1, steps)
 
 	switch {
 	case n1 != n2,
@@ -170,10 +188,19 @@ func (ft *Tester) write(w1, w2 io.Writer) {
 	b := make([]byte, ft.Rand.Intn(ft.MaxSize))
 	ft.Rand.Read(b)
 
-	n1, err1 := w1.Write(b)
-	n2, err2 := w2.Write(b)
+	var n1 int
+	var err1 error
+	defer func() {
+		ft.T.Logf("Write(b) len(b)=%d, n=%d, err=%v", len(b), n1, err1)
+	}()
 
-	ft.T.Logf("Write(b) n=%d, err=%v", n1, err1)
+	n1, err1 = w1.Write(b)
+	ft.off += int64(n1)
+	if ft.off > ft.len {
+		ft.len = ft.off
+	}
+
+	n2, err2 := w2.Write(b)
 
 	if n1 != n2 || (err1 == nil && err2 != nil) || (err1 != nil && err2 == nil) {
 		ft.T.Errorf("Write(b), n=%d, err=%v, want n=%d, err=%v", n1, err1, n2, err2)
@@ -181,15 +208,40 @@ func (ft *Tester) write(w1, w2 io.Writer) {
 }
 
 func (ft *Tester) seek(s1, s2 io.Seeker) {
+	// TODO: negative offset values
 	offset := ft.Rand.Int63n(int64(ft.MaxSize))
 	whence := ft.Rand.Intn(3)
 
-	n1, err1 := s1.Seek(offset, whence)
-	n2, err2 := s2.Seek(offset, whence)
+	var n1 int64
+	var err1 error
+	defer func() {
+		ft.T.Logf("Seek(%d, %d) n=%d, err=%v", offset, whence, n1, err1)
+	}()
 
-	ft.T.Logf("Seek(%d, %d) n=%d, err=%v", offset, whence, n1, err1)
+	n1, err1 = s1.Seek(offset, whence)
+	n2, err2 := s2.Seek(offset, whence)
 
 	if n1 != n2 || (err1 == nil && err2 != nil) || (err1 != nil && err2 == nil) {
 		ft.T.Errorf("Seek(%d, %d), n=%d, err=%v, want n=%d, err=%v", offset, whence, n1, err1, n2, err2)
 	}
+
+	// From the io.Seeker docs:
+	//
+	//	Seeking to any positive offset is legal, but the
+	// 	behavior of subsequent I/O operations on the
+	// 	underlying object is implementation-dependent.
+	//
+	// To avoid testing implementation-dependent features, if
+	// our seek went beyond the end of the file, rewind to the
+	// end.
+	if n1 > ft.len {
+		if _, err := s1.Seek(ft.len, 0); err != nil {
+			ft.T.Errorf("Seek(%d, 0): rewind failed: %v", ft.len, err)
+		}
+		if _, err := s2.Seek(ft.len, 0); err != nil {
+			ft.T.Errorf("Seek(%d, 0): rewind of base object failed: %v", ft.len, err)
+		}
+		n1 = ft.len
+	}
+	ft.off = n1
 }
