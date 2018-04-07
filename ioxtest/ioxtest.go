@@ -51,6 +51,10 @@ type Tester struct {
 	off, len int64
 }
 
+type truncater interface {
+	Truncate(size int64) error
+}
+
 func (ft *Tester) Run() {
 	if ft.Rand == nil {
 		ft.Rand = rand.New(rand.NewSource(99))
@@ -59,7 +63,7 @@ func (ft *Tester) Run() {
 		ft.MaxSize = 1 << 20
 	}
 	if ft.NumEvents == 0 {
-		ft.NumEvents = ft.Rand.Intn(2048)
+		ft.NumEvents = 2048
 	}
 
 	var tasks []func()
@@ -78,7 +82,11 @@ func (ft *Tester) Run() {
 			ft.seek(s, ft.F2.(io.Seeker))
 		})
 	}
-	// TODO: interface{ Truncate(size int64) error }
+	if s, ok := ft.F1.(truncater); ok {
+		tasks = append(tasks, func() {
+			ft.truncate(s, ft.F2.(truncater))
+		})
+	}
 
 	for i := 0; i < ft.NumEvents; i++ {
 		if ft.T.Failed() {
@@ -241,7 +249,22 @@ func (ft *Tester) seek(s1, s2 io.Seeker) {
 		if _, err := s2.Seek(ft.len, 0); err != nil {
 			ft.T.Errorf("Seek(%d, 0): rewind of base object failed: %v", ft.len, err)
 		}
-		n1 = ft.len
+		ft.off = ft.len
 	}
-	ft.off = n1
+}
+
+func (ft *Tester) truncate(s1, s2 truncater) {
+	size := ft.Rand.Int63n(int64(ft.MaxSize))
+
+	var err1 error
+	defer func() {
+		ft.T.Logf("Truncate(%d) err=%v", size, err1)
+	}()
+
+	err1 = s1.Truncate(size)
+	err2 := s2.Truncate(size)
+
+	if (err1 == nil && err2 != nil) || (err1 != nil && err2 == nil) {
+		ft.T.Errorf("Truncate(%d), err=%v, want err=%v", size, err1, err2)
+	}
 }
