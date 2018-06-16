@@ -15,6 +15,7 @@
 package iox
 
 import (
+	"io"
 	"math/rand"
 	"os"
 	"testing"
@@ -59,6 +60,27 @@ func invariants(t *testing.T, bf *BufferFile) {
 			t.Fatalf("bf.flen=%d != bf.f.Seek(0, 2)=%d", bf.flen, flen)
 		}
 	}
+}
+
+func TestBufferFileDefault(t *testing.T) {
+	filer := NewFiler(1)
+	bf := filer.BufferFile(0)
+	if _, err := bf.Read(make([]byte, 3)); err != io.EOF {
+		t.Errorf("empty Read err=%v, want io.EOF", err)
+	}
+	if _, err := bf.ReadAt(make([]byte, 3), 0); err != io.EOF {
+		t.Errorf("empty ReadAt err=%v, want io.EOF", err)
+	}
+	if _, err := bf.Seek(-1, os.SEEK_SET); err == nil {
+		t.Error("negative Seek returned no error")
+	}
+	if _, err := bf.Write([]byte("hello")); err != nil {
+		t.Error(err)
+	}
+	if bf.f != nil {
+		t.Error("default buffer size should not need a file for a small write")
+	}
+	bf.Close()
 }
 
 func TestBufferFileSmall(t *testing.T) {

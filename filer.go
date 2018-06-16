@@ -190,11 +190,6 @@ func (f *Filer) newFile() *File {
 	return file
 }
 
-func (f *Filer) wrap(osfile *os.File) *File {
-	file := &File{File: osfile, filer: f}
-	return file
-}
-
 func (f *Filer) rand() string {
 	const mod = 0x7fffffff
 

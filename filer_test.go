@@ -17,6 +17,7 @@ package iox
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -35,6 +36,10 @@ func TestFiler(t *testing.T) {
 		t.Errorf("temp file %q does not have '.txt' suffix", f1.Name())
 	}
 
+	if _, err := filer.Open("/doesnotexist"); !os.IsNotExist(err) {
+		t.Errorf(`Open("/doesnotexist") err=%v, want os.IsNotExist`, err)
+	}
+
 	f1dup, err := filer.Open(f1.Name())
 	if err != nil {
 		t.Fatal(err)
@@ -42,6 +47,14 @@ func TestFiler(t *testing.T) {
 	f1name := f1.Name()
 	if f1dup.Name() != f1name {
 		t.Errorf("f1dup.Name()=%q, want %q", f1dup.Name(), f1name)
+	}
+	if err := f1dup.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	f1dup, err = filer.OpenFile(f1.Name(), os.O_RDONLY, 0600)
+	if err != nil {
+		t.Fatal(err)
 	}
 	if err := f1dup.Close(); err != nil {
 		t.Fatal(err)
@@ -108,6 +121,13 @@ func TestFilerShutdownClean(t *testing.T) {
 	f3err := <-f3ch
 	if f3err != context.Canceled {
 		t.Errorf("f3 create error: %v, want context Canceled", f3err)
+	}
+
+	if _, err := filer.OpenFile(filepath.Join(os.TempDir(), "never-created"), os.O_CREATE, 0600); err != context.Canceled {
+		t.Errorf("shutdown-then-OpenFile err=%v, want context.Canceled", err)
+	}
+	if _, err := filer.Open(filepath.Join(os.TempDir(), "never-created")); err != context.Canceled {
+		t.Errorf("shutdown-then-Open err=%v, want context.Canceled", err)
 	}
 }
 
