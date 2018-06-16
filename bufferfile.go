@@ -22,7 +22,9 @@ import (
 
 // BufferFile creates a buffered file with up to memSize bytes stored in memory.
 //
-// The underlying file descriptor should be carefully avoided as the
+// If memSize is zero, a default value is chosen.
+//
+// The underlying file descriptor should not be handled directly as the
 // fraction of the contents stored in the OS file may change.
 func (f *Filer) BufferFile(memSize int) *BufferFile {
 	const defaultMemSize = 1 << 16
@@ -35,13 +37,15 @@ func (f *Filer) BufferFile(memSize int) *BufferFile {
 	}
 }
 
-// BufferFile is a temporary file with a a fixed prefix stored in memory.
+// BufferFile is a temporary file that stores its first N bytes in memory.
 //
-// This allows for typical cases where the contents fit in the prefix to
-// avoid the disk entirely and not hold a file descriptor.
+// A BufferFile will not create an underlying temporary file until a Write
+// or a Seek pushes it beyond its memory limit. This allows for typical
+// cases where the contents fit in memory to avoid the disk entirely
+// and not hold a file descriptor.
 type BufferFile struct {
 	io.Reader
-	// TODO: io.ReaderAt
+	io.ReaderAt
 	io.Writer
 	io.Seeker
 	io.Closer
