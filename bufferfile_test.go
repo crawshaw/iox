@@ -43,11 +43,11 @@ func invariants(t *testing.T, bf *BufferFile) {
 		}()
 		if foffWant := bf.off - int64(bf.bufMax); foffWant < 0 {
 			if foff != 0 {
-				t.Fatalf("bf.off=%d < bf.bufMax=%d but bf.f.Seek=%d, not 0", bf.off, bf.bufMax, foff)
+				t.Fatalf("bf.off=%d < bf.bufMax=%d but bf.f.Seek(0, 1)=%d, not 0", bf.off, bf.bufMax, foff)
 			}
 		} else {
 			if foff != foffWant {
-				t.Fatalf("(bf.off=%d - bf.bufMax=%d)=%d != bf.f.Seek=%d", bf.off, bf.bufMax, foffWant, foff)
+				t.Fatalf("(bf.off=%d - bf.bufMax=%d)=%d != bf.f.Seek(0, 1)=%d", bf.off, bf.bufMax, foffWant, foff)
 			}
 		}
 

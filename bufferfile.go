@@ -169,7 +169,29 @@ func (bf *BufferFile) Seek(offset int64, whence int) (int64, error) {
 
 // Truncate changes the file size.
 // It does not move the offset, use Seek for that.
-// TODO func (bf *BufferFile) Truncate(size int64) error
+func (bf *BufferFile) Truncate(size int64) error {
+	if bf.err != nil {
+		return bf.err
+	}
+	for size > int64(len(bf.buf)) && len(bf.buf) < bf.bufMax {
+		bf.buf = append(bf.buf, 0)
+	}
+	if size >= int64(bf.bufMax) {
+		if err := bf.ensureFile(); err != nil {
+			return err
+		}
+		flen := size - int64(bf.bufMax)
+		bf.err = bf.f.Truncate(flen)
+		bf.flen = flen
+	} else {
+		bf.buf = bf.buf[:size]
+		if bf.f != nil {
+			bf.err = bf.f.Truncate(0)
+			bf.flen = 0
+		}
+	}
+	return bf.err
+}
 
 // Close closes the BufferFile, deleting any underlying temporary file.
 func (bf *BufferFile) Close() (err error) {
