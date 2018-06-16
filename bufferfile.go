@@ -122,6 +122,26 @@ func (bf *BufferFile) Read(p []byte) (n int, err error) {
 	return n, err
 }
 
+func (bf *BufferFile) ReadAt(p []byte, off int64) (n int, err error) {
+	if off < int64(len(bf.buf)) {
+		// Some of the read comes out of the byte buffer.
+		n = copy(p, bf.buf[off:])
+		off += int64(n)
+		p = p[n:]
+	}
+	if len(p) == 0 {
+		// All of the read came out of the byte buffer.
+		return n, nil
+	}
+	if bf.f == nil {
+		return n, io.EOF
+	}
+	off -= int64(len(bf.buf))
+	n2, err := bf.f.ReadAt(p, off)
+	n += n2
+	return n, err
+}
+
 func (bf *BufferFile) Seek(offset int64, whence int) (int64, error) {
 	if bf.err != nil {
 		return 0, bf.err
