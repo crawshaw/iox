@@ -15,9 +15,11 @@
 package iox
 
 import (
+	"context"
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestFiler(t *testing.T) {
@@ -55,11 +57,89 @@ func TestFiler(t *testing.T) {
 	if err := f1.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := f1.Close(); err != os.ErrClosed {
-		t.Errorf("second close of f1 err=%v, want os.ErrClosed", err)
+	err = f1.Close()
+	if underlyingError(err) != os.ErrClosed {
+		t.Errorf("second close of f1 err=%v (%T), want os.ErrClosed", err, err)
 	}
 
 	if _, err := os.Stat(f1name); err == nil {
 		t.Errorf("could stat temp file %q after close", f1name)
+	}
+}
+
+func underlyingError(err error) error {
+	if err == nil {
+		return err
+	}
+	if perr, _ := err.(*os.PathError); perr != nil {
+		return perr.Err
+	}
+	return err
+}
+
+func TestFilerShutdownClean(t *testing.T) {
+	filer := NewFiler(2)
+	f1, err := filer.TempFile("", "testfile1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f2, err := filer.TempFile("", "testfile2", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	f3ch := make(chan error)
+	go func() {
+		f3, err := filer.TempFile("", "testfile3", "")
+		if f3 != nil {
+			f3.Close()
+		}
+
+		// At this point, Shutdown has been triggered.
+		f1.Close()
+		f2.Close()
+
+		f3ch <- err
+	}()
+
+	time.Sleep(10 * time.Millisecond)
+	filer.Shutdown(context.Background())
+
+	f3err := <-f3ch
+	if f3err != context.Canceled {
+		t.Errorf("f3 create error: %v, want context Canceled", f3err)
+	}
+}
+
+func TestFilerShutdownForced(t *testing.T) {
+	filer := NewFiler(2)
+	f1, err := filer.TempFile("", "testfile1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f2, err := filer.TempFile("", "testfile2", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	f3ch := make(chan error)
+	go func() {
+		f3, err := filer.TempFile("", "testfile3", "")
+		if f3 != nil {
+			f3.Close()
+		}
+		f3ch <- err
+	}()
+
+	time.Sleep(10 * time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := filer.Shutdown(ctx); err != context.Canceled {
+		t.Errorf("filer.Shutdown(ctx)=%v, want context.Canceled", err)
+	}
+
+	_ = f2
+	if err := underlyingError(f1.Close()); err != os.ErrClosed {
+		t.Errorf("f1.Close()=%v, want os.ErrClosed", err)
 	}
 }

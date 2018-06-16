@@ -15,9 +15,9 @@
 package iox
 
 import (
+	"context"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"sync"
 	"syscall"
@@ -26,12 +26,16 @@ import (
 
 // A Filer creates files, managing load on file descriptors.
 type Filer struct {
-	limiter chan struct{}
 	tempdir string
 
-	mu   sync.Mutex
-	seed uint32
-	seq  int
+	shuttingDown chan struct{} // closed on shutdown
+
+	mu      sync.Mutex
+	cond    *sync.Cond
+	files   map[*File]struct{}
+	fdlimit int
+	seed    uint32
+	seq     int
 }
 
 // NewFiler creates a Filer which will open at most fdLimit files simultaneously.
@@ -45,13 +49,15 @@ func NewFiler(fdLimit int) *Filer {
 	if fdLimit == 0 {
 		fdLimit = 90 // getrlimit failed, guess
 	}
-	return &Filer{
-		limiter: make(chan struct{}, fdLimit),
-		tempdir: os.TempDir(),
+	filer := &Filer{
+		tempdir:      os.TempDir(),
+		shuttingDown: make(chan struct{}),
+		files:        make(map[*File]struct{}),
+		fdlimit:      fdLimit,
 	}
+	filer.cond = sync.NewCond(&filer.mu)
+	return filer
 }
-
-// TODO func (f *Filer) Shutdown()
 
 // SetTempdir sets the default directory used to hold temporary files.
 func (f *Filer) SetTempdir(tempdir string) {
@@ -64,13 +70,17 @@ func (f *Filer) SetTempdir(tempdir string) {
 // It is similar to os.Open except it will block if Filer has exhasted
 // its file descriptors until one is available.
 func (f *Filer) Open(name string) (*File, error) {
-	f.limiter <- struct{}{}
+	file := f.newFile()
+	if file == nil {
+		return nil, context.Canceled
+	}
 	osfile, err := os.Open(name)
 	if err != nil {
-		<-f.limiter
+		file.remove()
 		return nil, err
 	}
-	return f.wrap(osfile), nil
+	file.File = osfile
+	return file, nil
 }
 
 // OpenFile is a generalized file open method.
@@ -78,17 +88,24 @@ func (f *Filer) Open(name string) (*File, error) {
 // It is similar to os.OpenFile except it will block if Filer has exhasted
 // its file descriptors until one is available.
 func (f *Filer) OpenFile(name string, flag int, perm os.FileMode) (*File, error) {
-	f.limiter <- struct{}{}
+	file := f.newFile()
+	if file == nil {
+		return nil, context.Canceled
+	}
 	osfile, err := os.OpenFile(name, flag, perm)
 	if err != nil {
-		<-f.limiter
+		file.remove()
 		return nil, err
 	}
-	return f.wrap(osfile), nil
+	file.File = osfile
+	return file, nil
 }
 
 func (f *Filer) TempFile(dir, prefix, suffix string) (file *File, err error) {
-	f.limiter <- struct{}{}
+	file = f.newFile()
+	if file == nil {
+		return nil, context.Canceled
+	}
 
 	if dir == "" {
 		dir = f.tempdir
@@ -104,16 +121,77 @@ func (f *Filer) TempFile(dir, prefix, suffix string) (file *File, err error) {
 		break
 	}
 	if err != nil {
+		file.remove()
 		return nil, err
 	}
-	file = f.wrap(osfile)
+	file.File = osfile
 	file.isTemp = true
 	return file, nil
 }
 
+// Shutdown gracefully shuts down the Filer.
+// Any active files continue to work until the passed context is done.
+// At that point they are explicitly closed and further operations return errors.
+// Shutdown returns the error from ctx.
+func (f *Filer) Shutdown(ctx context.Context) error {
+	close(f.shuttingDown)
+	f.cond.Broadcast()
+	done := make(chan struct{})
+
+	go func() {
+		select {
+		case <-ctx.Done():
+			f.cond.Broadcast()
+		case <-done:
+		}
+	}()
+
+	f.mu.Lock()
+	for {
+		select {
+		case <-ctx.Done():
+			for file := range f.files {
+				file.File.Close()
+				delete(f.files, file)
+			}
+			// now len(f.files) == 0
+		default:
+		}
+		if len(f.files) == 0 {
+			break
+		}
+		f.cond.Wait()
+	}
+	f.mu.Unlock()
+
+	close(done)
+	return ctx.Err()
+}
+
+func (f *Filer) newFile() *File {
+	file := &File{filer: f}
+
+	f.mu.Lock()
+	for {
+		select {
+		case <-f.shuttingDown:
+			f.mu.Unlock()
+			return nil
+		default:
+		}
+		if len(f.files) < f.fdlimit {
+			break
+		}
+		f.cond.Wait()
+	}
+	f.files[file] = struct{}{}
+	f.mu.Unlock()
+
+	return file
+}
+
 func (f *Filer) wrap(osfile *os.File) *File {
 	file := &File{File: osfile, filer: f}
-	runtime.SetFinalizer(file, fileFinalizer)
 	return file
 }
 
@@ -134,7 +212,7 @@ func (f *Filer) rand() string {
 
 // File is an *os.File managed by a Filer.
 //
-// Unlike an os.File, the Close method must be called on a File.
+// The Close method must be called on a File.
 type File struct {
 	*os.File
 
@@ -142,26 +220,23 @@ type File struct {
 	isTemp bool
 }
 
+func (file *File) remove() {
+	file.filer.mu.Lock()
+	delete(file.filer.files, file)
+	file.filer.cond.Signal()
+	file.filer.mu.Unlock()
+}
+
 // Close closes the underlying file descriptor and informs the Filer.
 func (file *File) Close() error {
-	if file.File == nil {
-		return os.ErrClosed
-	}
 	err := file.File.Close()
-	<-file.filer.limiter
+	file.remove()
+
 	if file.isTemp {
 		rmErr := os.Remove(file.File.Name())
 		if err == nil {
 			err = rmErr
 		}
 	}
-	file.File = nil
 	return err
-}
-
-// TODO: This may simply be too opinionated on my part. Consider removing.
-func fileFinalizer(file *File) {
-	if file.File != nil {
-		panic("filer file " + file.File.Name() + " never closed")
-	}
 }
