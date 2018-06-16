@@ -72,18 +72,16 @@ func (bf *BufferFile) Write(p []byte) (n int, err error) {
 		return 0, bf.err
 	}
 	finalOff := bf.off + int64(len(p))
+	if finalOff >= int64(bf.bufMax) {
+		if err := bf.ensureFile(); err != nil {
+			return 0, err
+		}
+	}
 	for finalOff > int64(len(bf.buf)) && len(bf.buf) < bf.bufMax {
 		bf.buf = append(bf.buf, 0)
 	}
-	if finalOff >= int64(bf.bufMax) {
-		bf.ensureFile()
-	}
 	if bf.off < int64(len(bf.buf)) {
-		n = len(bf.buf) - int(bf.off)
-		if n > len(p) {
-			n = len(p)
-		}
-		copy(bf.buf[bf.off:], p[:n])
+		n = copy(bf.buf[bf.off:], p)
 		bf.off += int64(n)
 		p = p[n:]
 	}

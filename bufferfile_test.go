@@ -16,19 +16,49 @@ package iox
 
 import (
 	"math/rand"
+	"os"
 	"testing"
 
 	"crawshaw.io/iox/ioxtest"
 )
 
 func invariants(t *testing.T, bf *BufferFile) {
-	// TODO: test these regularly
+	if len(bf.buf) > bf.bufMax {
+		t.Fatalf("len(bf.buf)=%d > bf.bufMax=%d", len(bf.buf), bf.bufMax)
+	}
+	if len(bf.buf) < bf.bufMax {
+		if bf.flen != 0 {
+			t.Fatalf("len(bf.buf)=%d < bf.bufMax=%d but bf.flen=%d", len(bf.buf), bf.bufMax, bf.flen)
+		}
+	}
+	if bf.f != nil {
+		foff, err := bf.f.Seek(0, os.SEEK_CUR)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			if _, err := bf.f.Seek(foff, os.SEEK_SET); err != nil {
+				t.Fatal(err)
+			}
+		}()
+		if foffWant := bf.off - int64(bf.bufMax); foffWant < 0 {
+			if foff != 0 {
+				t.Fatalf("bf.off=%d < bf.bufMax=%d but bf.f.Seek=%d, not 0", bf.off, bf.bufMax, foff)
+			}
+		} else {
+			if foff != foffWant {
+				t.Fatalf("(bf.off=%d - bf.bufMax=%d)=%d != bf.f.Seek=%d", bf.off, bf.bufMax, foffWant, foff)
+			}
+		}
 
-	// Some invariants and state details:
-	// len(buf) <= bufMax always
-	// len(buf) < bufMax  => the entire contents is in memory.
-	// len(buf) < bufMax  => f == nil || f.Seek(0, 1) == 0
-	// f == nil || f.Seek(0, 1) == flen
+		flen, err := bf.f.Seek(0, os.SEEK_END)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bf.flen != flen {
+			t.Fatalf("bf.flen=%d != bf.f.Seek(0, 2)=%d", bf.flen, flen)
+		}
+	}
 }
 
 func TestBufferFileSmall(t *testing.T) {
@@ -69,10 +99,11 @@ func TestBufferFile(t *testing.T) {
 	}
 
 	ft := &ioxtest.Tester{
-		F1:   bf,
-		F2:   f,
-		T:    t,
-		Rand: testRand,
+		F1:         bf,
+		F2:         f,
+		T:          t,
+		Rand:       testRand,
+		Invariants: func() { invariants(t, bf) },
 	}
 	ft.Run()
 
