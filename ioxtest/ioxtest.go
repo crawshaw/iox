@@ -34,6 +34,8 @@ import (
 //	io.Reader
 //	io.Writer
 //	io.Seeker
+//	io.ReaderAt
+//	interface{ Truncate(size int64) error }
 //
 // Each interface that matches is added to a pool of potential
 // operations, that are executed at random.
@@ -80,6 +82,11 @@ func (ft *Tester) Run() {
 	if s, ok := ft.F1.(io.Seeker); ok {
 		tasks = append(tasks, func() {
 			ft.seek(s, ft.F2.(io.Seeker))
+		})
+	}
+	if s, ok := ft.F1.(io.ReaderAt); ok {
+		tasks = append(tasks, func() {
+			ft.readAt(s, ft.F2.(io.ReaderAt))
 		})
 	}
 	if s, ok := ft.F1.(truncater); ok {
@@ -186,9 +193,33 @@ func (ft *Tester) read(r1, r2 io.Reader) {
 	case n1 != n2,
 		(err1 == io.EOF && err2 != io.EOF) || (err1 != io.EOF && err2 == io.EOF),
 		(err1 == nil && err2 != nil) || (err1 != nil && err2 == nil):
-		ft.T.Errorf("Read(make([]byte, %d)) n=%d, err=%v, want n=%d, err=%v", len(b1), n1, err1, n2, err2)
+		ft.T.Errorf("Read(b1[:%d]) n=%d, err=%v, want n=%d, err=%v", len(b1), n1, err1, n2, err2)
 	case !bytes.Equal(b1, b2):
-		ft.T.Errorf("Read(make([]byte, %d)) bytes do not match", len(b1))
+		ft.T.Errorf("Read(b1[:%d]) bytes do not match", len(b1))
+	}
+}
+
+func (ft *Tester) readAt(r1, r2 io.ReaderAt) {
+	b1 := make([]byte, ft.Rand.Intn(ft.MaxSize))
+	b2 := make([]byte, len(b1))
+	off := int64(ft.Rand.Intn(ft.MaxSize))
+
+	var n1 int
+	var err1 error
+	defer func() {
+		ft.T.Logf("ReadAt(b1[:%d]), %d) n=%d, err=%v", len(b1), off, n1, err1)
+	}()
+
+	n1, err1 = r1.ReadAt(b1, off)
+	n2, err2 := r2.ReadAt(b2, off)
+
+	switch {
+	case n1 != n2,
+		(err1 == io.EOF && err2 != io.EOF) || (err1 != io.EOF && err2 == io.EOF),
+		(err1 == nil && err2 != nil) || (err1 != nil && err2 == nil):
+		ft.T.Errorf("ReadAt(b1[:%d], %d) n=%d, err=%v, want n=%d, err=%v", len(b1), off, n1, err1, n2, err2)
+	case !bytes.Equal(b1, b2):
+		ft.T.Errorf("ReadAt(b1[:%d], %d) bytes do not match", len(b1), off)
 	}
 }
 
