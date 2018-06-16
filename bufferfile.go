@@ -54,7 +54,7 @@ type BufferFile struct {
 	filer  *Filer
 	bufMax int
 	buf    []byte
-	f      *File
+	f      *File // nil when contents fit in memory
 	flen   int64 // current length of f
 
 	off int64 // kept in sync with pos in *File
@@ -72,14 +72,8 @@ func (bf *BufferFile) Write(p []byte) (n int, err error) {
 		return 0, bf.err
 	}
 	finalOff := bf.off + int64(len(p))
-	if finalOff > int64(len(bf.buf)) && len(bf.buf) < bf.bufMax {
-		growTo := int(n)
-		if growTo > bf.bufMax {
-			growTo = bf.bufMax
-		}
-		for len(bf.buf) < growTo {
-			bf.buf = append(bf.buf, 0)
-		}
+	for finalOff > int64(len(bf.buf)) && len(bf.buf) < bf.bufMax {
+		bf.buf = append(bf.buf, 0)
 	}
 	if finalOff >= int64(bf.bufMax) {
 		bf.ensureFile()
@@ -151,11 +145,6 @@ func (bf *BufferFile) Seek(offset int64, whence int) (int64, error) {
 		return 0, bf.err
 	}
 
-	const (
-		SeekStart   = 0
-		SeekCurrent = 1
-		SeekEnd     = 2
-	)
 	switch whence {
 	case os.SEEK_SET:
 		// use offset directly
@@ -167,22 +156,22 @@ func (bf *BufferFile) Seek(offset int64, whence int) (int64, error) {
 	if offset < 0 {
 		return -1, fmt.Errorf("iox.BufferFile: attempting to seek before beginning of BufferFile (%d)", offset)
 	}
-	if offset > int64(bf.bufMax) {
-		bf.ensureFile()
-	}
-	if offset < int64(len(bf.buf)) {
+	if offset < int64(bf.bufMax) {
 		if bf.f != nil {
 			_, bf.err = bf.f.Seek(0, os.SEEK_SET)
 		}
 	} else {
-		_, bf.err = bf.f.Seek(offset-int64(len(bf.buf)), os.SEEK_SET)
+		bf.ensureFile()
+		_, bf.err = bf.f.Seek(offset-int64(bf.bufMax), os.SEEK_SET)
 	}
 	bf.off = offset
 
 	return offset, bf.err
 }
 
-// TODO: func (bf *BufferFile) Truncate
+// Truncate changes the file size.
+// It does not move the offset, use Seek for that.
+// TODO func (bf *BufferFile) Truncate(size int64) error
 
 // Close closes the BufferFile, deleting any underlying temporary file.
 func (bf *BufferFile) Close() (err error) {

@@ -15,10 +15,49 @@
 package iox
 
 import (
+	"math/rand"
 	"testing"
 
 	"crawshaw.io/iox/ioxtest"
 )
+
+func invariants(t *testing.T, bf *BufferFile) {
+	// TODO: test these regularly
+
+	// Some invariants and state details:
+	// len(buf) <= bufMax always
+	// len(buf) < bufMax  => the entire contents is in memory.
+	// len(buf) < bufMax  => f == nil || f.Seek(0, 1) == 0
+	// f == nil || f.Seek(0, 1) == flen
+}
+
+func TestBufferFileSmall(t *testing.T) {
+	filer := NewFiler(2)
+
+	bf := filer.BufferFile(4096)
+	f, err := filer.TempFile("", "cmpfile-", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ft := &ioxtest.Tester{
+		F1:      bf,
+		F2:      f,
+		T:       t,
+		MaxSize: 4096,
+	}
+	ft.Run()
+
+	if bf.f != nil {
+		t.Error("small file events caused BufferFile to create a backing file")
+	}
+	if err := bf.Close(); err != nil {
+		t.Error(err)
+	}
+}
+
+// testRand is shared across runs to make -count=N more interesting.
+var testRand = rand.New(rand.NewSource(107))
 
 func TestBufferFile(t *testing.T) {
 	filer := NewFiler(2)
@@ -29,6 +68,15 @@ func TestBufferFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ft := &ioxtest.Tester{F1: bf, F2: f, T: t}
+	ft := &ioxtest.Tester{
+		F1:   bf,
+		F2:   f,
+		T:    t,
+		Rand: testRand,
+	}
 	ft.Run()
+
+	if err := bf.Close(); err != nil {
+		t.Error(err)
+	}
 }
