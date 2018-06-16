@@ -44,11 +44,12 @@ import (
 // If F1 implements io.Closer, then the object will be closed at
 // the end and the resulting error compared to F2.
 type Tester struct {
-	F1, F2    interface{}
-	T         *testing.T
-	Rand      *rand.Rand
-	MaxSize   int
-	NumEvents int
+	F1, F2     interface{}
+	T          *testing.T
+	Rand       *rand.Rand
+	MaxSize    int
+	NumEvents  int
+	Invariants func()
 
 	off, len int64
 }
@@ -107,6 +108,9 @@ func (ft *Tester) Run() {
 				}
 			}()
 			fn()
+			if ft.Invariants != nil {
+				ft.Invariants()
+			}
 		}()
 	}
 
@@ -157,7 +161,9 @@ func (ft *Tester) finalCompare() {
 		if !bytes.Equal(h1, h2) {
 			ft.T.Fatalf("final file has wrong hash %x, want %x", h1, h2)
 		}
-
+	}
+	if ft.Invariants != nil {
+		ft.Invariants()
 	}
 }
 
