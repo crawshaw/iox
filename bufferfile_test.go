@@ -77,6 +77,9 @@ func TestBufferFileDefault(t *testing.T) {
 	if _, err := bf.Write([]byte("hello")); err != nil {
 		t.Error(err)
 	}
+	if n := bf.Len(); n != 5 {
+		t.Errorf("Len()=%d, want 5", n)
+	}
 	if bf.f != nil {
 		t.Error("default buffer size should not need a file for a small write")
 	}
