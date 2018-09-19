@@ -224,6 +224,9 @@ func (file *File) remove() {
 
 // Close closes the underlying file descriptor and informs the Filer.
 func (file *File) Close() error {
+	if file == nil || file.File == nil {
+		return os.ErrInvalid
+	}
 	err := file.File.Close()
 	file.remove()
 

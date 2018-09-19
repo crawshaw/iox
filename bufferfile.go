@@ -201,6 +201,9 @@ func (bf *BufferFile) Truncate(size int64) error {
 
 // Close closes the BufferFile, deleting any underlying temporary file.
 func (bf *BufferFile) Close() (err error) {
+	if bf == nil {
+		return os.ErrInvalid
+	}
 	if bf.f != nil {
 		err = bf.f.Close()
 		bf.f = nil

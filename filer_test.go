@@ -163,3 +163,10 @@ func TestFilerShutdownForced(t *testing.T) {
 		t.Errorf("f1.Close()=%v, want os.ErrClosed", err)
 	}
 }
+
+func TestFileNilClose(t *testing.T) {
+	var f *File
+	if err := f.Close(); err != os.ErrInvalid {
+		t.Errorf("f.Close()=%v, want os.ErrInvalid", err)
+	}
+}

@@ -136,3 +136,10 @@ func TestBufferFile(t *testing.T) {
 		t.Error(err)
 	}
 }
+
+func TestBufferFileNilClose(t *testing.T) {
+	var f *BufferFile
+	if err := f.Close(); err != os.ErrInvalid {
+		t.Errorf("f.Close()=%v, want os.ErrInvalid", err)
+	}
+}
