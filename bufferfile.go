@@ -27,6 +27,9 @@ import (
 // The underlying file descriptor should not be handled directly as the
 // fraction of the contents stored in the OS file may change.
 func (f *Filer) BufferFile(memSize int) *BufferFile {
+	if f == nil {
+		panic("iox.BufferFile: Filer is nil")
+	}
 	const defaultMemSize = 1 << 16
 	if memSize == 0 {
 		memSize = defaultMemSize
