@@ -35,7 +35,6 @@ type Filer struct {
 	files   map[*File]struct{}
 	fdlimit int
 	seed    uint32
-	seq     int
 }
 
 // NewFiler creates a Filer which will open at most fdLimit files simultaneously.
@@ -194,8 +193,8 @@ func (f *Filer) rand() string {
 	const mod = 0x7fffffff
 
 	f.mu.Lock()
-	for f.seed == 0 || f.seed >= mod || f.seq > 100 {
-		f.seed = uint32(time.Now().UnixNano() + int64(os.Getpid()))
+	for f.seed == 0 {
+		f.seed = uint32((time.Now().UnixNano() + int64(os.Getpid())) % mod)
 	}
 	// Park-Miller RNG, constants from wikipedia.
 	v := uint32(uint64(f.seed) * 48271 % mod)
