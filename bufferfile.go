@@ -170,9 +170,9 @@ func (bf *BufferFile) Seek(offset int64, whence int) (int64, error) {
 	return offset, bf.err
 }
 
-// Len returns the current length of the buffer file.
+// Size returns the current length of the buffer file.
 // It is equivalent to the position returned by bf.Seek(0, os.SEEK_END).
-func (bf *BufferFile) Len() int64 {
+func (bf *BufferFile) Size() int64 {
 	return int64(len(bf.buf)) + bf.flen
 }
 
