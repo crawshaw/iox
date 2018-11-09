@@ -26,6 +26,8 @@ import (
 
 // A Filer creates files, managing load on file descriptors.
 type Filer struct {
+	DefaultBufferMemSize int // default value: 64kb
+
 	tempdir string
 
 	shuttingDown chan struct{} // closed on shutdown
@@ -49,6 +51,8 @@ func NewFiler(fdLimit int) *Filer {
 		fdLimit = 90 // getrlimit failed, guess
 	}
 	filer := &Filer{
+		DefaultBufferMemSize: 1 << 16,
+
 		tempdir:      os.TempDir(),
 		shuttingDown: make(chan struct{}),
 		files:        make(map[*File]struct{}),

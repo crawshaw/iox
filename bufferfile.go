@@ -30,9 +30,8 @@ func (f *Filer) BufferFile(memSize int) *BufferFile {
 	if f == nil {
 		panic("iox.BufferFile: Filer is nil")
 	}
-	const defaultMemSize = 1 << 16
 	if memSize == 0 {
-		memSize = defaultMemSize
+		memSize = f.DefaultBufferMemSize
 	}
 	return &BufferFile{
 		filer:  f,
