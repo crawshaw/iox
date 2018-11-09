@@ -15,6 +15,7 @@
 package iox
 
 import (
+	"bufio"
 	"fmt"
 	"io"
 	"os"
@@ -58,6 +59,8 @@ type BufferFile struct {
 	buf    []byte
 	f      *File // nil when contents fit in memory
 	flen   int64 // current length of f
+	fr     bufio.Reader
+	fw     bufio.Writer
 
 	off int64 // kept in sync with pos in *File
 }
@@ -65,6 +68,8 @@ type BufferFile struct {
 func (bf *BufferFile) ensureFile() error {
 	if bf.f == nil {
 		bf.f, bf.err = bf.filer.TempFile("", "bufferfile-", "")
+		bf.fr.Reset(bf.f)
+		bf.fw.Reset(bf.f)
 	}
 	return bf.err
 }
@@ -90,7 +95,12 @@ func (bf *BufferFile) Write(p []byte) (n int, err error) {
 	if len(p) == 0 {
 		return n, nil // done, the write fit in the memory buffer
 	}
-	n2, err := bf.f.Write(p)
+
+	if bf.err = bf.frReset(); bf.err != nil {
+		return n, bf.err
+	}
+
+	n2, err := bf.fw.Write(p)
 	bf.err = err
 	n += n2
 	bf.off += int64(n2)
@@ -98,6 +108,28 @@ func (bf *BufferFile) Write(p []byte) (n int, err error) {
 		bf.flen = fpos
 	}
 	return n, err
+}
+
+func (bf *BufferFile) frReset() error {
+	if bf.fr.Buffered() > 0 {
+		// The bufio.Reader read ahead so the bf.f
+		// I/O offset needs to be repositioned.
+		if _, err := bf.f.Seek(bf.off, 0); err != nil {
+			return err
+		}
+		bf.fr.Reset(bf.f)
+	}
+	return nil
+}
+
+func (bf *BufferFile) fwReset() error {
+	if bf.fw.Buffered() > 0 {
+		// We have pending writes. Flush them now.
+		if err := bf.fw.Flush(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (bf *BufferFile) Read(p []byte) (n int, err error) {
@@ -112,7 +144,12 @@ func (bf *BufferFile) Read(p []byte) (n int, err error) {
 	if bf.f == nil {
 		return 0, io.EOF
 	}
-	n, err = bf.f.Read(p)
+
+	if bf.err = bf.fwReset(); bf.err != nil {
+		return 0, bf.err
+	}
+
+	n, err = bf.fr.Read(p)
 	bf.off += int64(n)
 	if err != io.EOF {
 		bf.err = err
@@ -134,6 +171,14 @@ func (bf *BufferFile) ReadAt(p []byte, off int64) (n int, err error) {
 	if bf.f == nil {
 		return n, io.EOF
 	}
+
+	if bf.err = bf.fwReset(); bf.err != nil {
+		return 0, bf.err
+	}
+	if bf.err = bf.frReset(); bf.err != nil {
+		return 0, bf.err
+	}
+
 	off -= int64(len(bf.buf))
 	n2, err := bf.f.ReadAt(p, off)
 	n += n2
@@ -143,6 +188,13 @@ func (bf *BufferFile) ReadAt(p []byte, off int64) (n int, err error) {
 func (bf *BufferFile) Seek(offset int64, whence int) (int64, error) {
 	if bf.err != nil {
 		return 0, bf.err
+	}
+
+	if bf.err = bf.fwReset(); bf.err != nil {
+		return bf.off, bf.err
+	}
+	if bf.err = bf.frReset(); bf.err != nil {
+		return bf.off, bf.err
 	}
 
 	switch whence {
@@ -181,6 +233,12 @@ func (bf *BufferFile) Truncate(size int64) error {
 	if bf.err != nil {
 		return bf.err
 	}
+	if bf.err = bf.fwReset(); bf.err != nil {
+		return bf.err
+	}
+	if bf.err = bf.frReset(); bf.err != nil {
+		return bf.err
+	}
 	for size > int64(len(bf.buf)) && len(bf.buf) < bf.bufMax {
 		bf.buf = append(bf.buf, 0)
 	}
@@ -207,7 +265,13 @@ func (bf *BufferFile) Close() (err error) {
 		return os.ErrInvalid
 	}
 	if bf.f != nil {
-		err = bf.f.Close()
+		err = bf.fwReset()
+		if err == nil {
+			err = bf.frReset()
+		}
+		if closeErr := bf.f.Close(); err == nil {
+			err = closeErr
+		}
 		bf.f = nil
 	}
 	if err != nil {
