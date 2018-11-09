@@ -154,7 +154,7 @@ func (f *fetcher) saveToCache() {
 		return // cache disabled
 	}
 
-	f.err = f.c.CachePut(f.c.ctx, f.url, io.NewSectionReader(f.f, 0, f.f.Len()), f.f.Len())
+	f.err = f.c.CachePut(f.c.ctx, f.url, io.NewSectionReader(f.f, 0, f.f.Size()), f.f.Size())
 }
 
 func (f *fetcher) fetch(req *http.Request) {
@@ -185,7 +185,7 @@ func (f *fetcher) fetch(req *http.Request) {
 		}
 		f.c.Logf(
 			`{"where": "webfetch", "what": "fetch", "name": %q, "when": %q, "duration": %q, "status": %d, "len": %d}`,
-			req.URL.String(), start, duration, sc, f.f.Len(),
+			req.URL.String(), start, duration, sc, f.f.Size(),
 		)
 	}
 
@@ -214,7 +214,7 @@ func (f *fetcher) response(req *http.Request) (*http.Response, error) {
 	}
 
 	frc := &fetchReadCloser{
-		Reader: io.NewSectionReader(f.f, 0, f.f.Len()),
+		Reader: io.NewSectionReader(f.f, 0, f.f.Size()),
 		f:      f,
 	}
 	runtime.SetFinalizer(frc, func(frc *fetchReadCloser) {
