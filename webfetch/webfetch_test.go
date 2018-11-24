@@ -43,6 +43,8 @@ func TestWebFetch(t *testing.T) {
 		case <-block:
 		}
 
+		w.Header().Add("Content-Type", "text/plain")
+
 		switch r.URL.Path {
 		case "/404":
 			w.WriteHeader(404)
@@ -64,6 +66,12 @@ func TestWebFetch(t *testing.T) {
 		res, err := webclient.Do(newReq(ts.URL + path))
 		if err != nil {
 			t.Fatal(err)
+		}
+		if res.StatusCode == 0 {
+			t.Errorf("%s: result missing StatusCode", path)
+		}
+		if contentType := res.Header.Get("Content-Type"); contentType != "text/plain" {
+			t.Errorf("Content-Type: %q, want %q", contentType, "text/plain")
 		}
 		body, err := ioutil.ReadAll(res.Body)
 		res.Body.Close()
@@ -465,24 +473,26 @@ func TestConcurrency(t *testing.T) {
 type memCache struct {
 	logf func(format string, v ...interface{})
 
-	mu sync.Mutex
-	m  map[string]string
+	mu          sync.Mutex
+	content     map[string]string
+	contentType map[string]string
 }
 
-func (m *memCache) get(ctx context.Context, dst io.Writer, url string) (bool, error) {
+func (m *memCache) get(ctx context.Context, dst io.Writer, url string) (bool, string, error) {
 	m.mu.Lock()
-	v, found := m.m[url]
+	v, found := m.content[url]
+	contentType := m.contentType[url]
 	m.mu.Unlock()
 
 	m.logf("memCache.get(%q) found=%v", url, found)
 	if !found {
-		return false, nil
+		return false, "", nil
 	}
 	_, err := io.WriteString(dst, v)
-	return true, err
+	return true, contentType, err
 }
 
-func (m *memCache) put(ctx context.Context, url string, src io.Reader, srcLen int64) error {
+func (m *memCache) put(ctx context.Context, url, contenType string, src io.Reader, srcLen int64) error {
 	v, err := ioutil.ReadAll(src)
 	m.logf("memCache.put(%q) len=%d", url, len(v))
 	if err != nil {
@@ -493,7 +503,8 @@ func (m *memCache) put(ctx context.Context, url string, src io.Reader, srcLen in
 	}
 
 	m.mu.Lock()
-	m.m[url] = string(v)
+	m.content[url] = string(v)
+	m.contentType[url] = contenType
 	m.mu.Unlock()
 
 	return nil
@@ -501,7 +512,8 @@ func (m *memCache) put(ctx context.Context, url string, src io.Reader, srcLen in
 
 func newMemCache(logf func(format string, v ...interface{})) *memCache {
 	return &memCache{
-		m:    make(map[string]string),
-		logf: logf,
+		content:     make(map[string]string),
+		contentType: make(map[string]string),
+		logf:        logf,
 	}
 }

@@ -16,8 +16,8 @@ type Client struct {
 	Filer    *iox.Filer
 	Client   *http.Client
 	Logf     func(format string, v ...interface{})
-	CacheGet func(ctx context.Context, dst io.Writer, url string) (bool, error)
-	CachePut func(ctx context.Context, url string, src io.Reader, srcLen int64) error
+	CacheGet func(ctx context.Context, dst io.Writer, url string) (found bool, contentType string, err error)
+	CachePut func(ctx context.Context, url, contentType string, src io.Reader, srcLen int64) error
 
 	initOnce sync.Once // initializes the remaining fields with the init method
 
@@ -127,7 +127,8 @@ type fetcher struct {
 
 	reqs int // guarded by c.mu
 
-	f *iox.BufferFile // owned by fetch until done is closed
+	f           *iox.BufferFile // owned by fetch until done is closed
+	contentType string
 
 	done chan struct{}
 	res  *http.Response
@@ -138,7 +139,8 @@ func (f *fetcher) fetchFromCache() {
 	if f.c.CacheGet == nil {
 		return // cache disabled
 	}
-	found, err := f.c.CacheGet(f.c.ctx, f.f, f.url)
+	found, contentType, err := f.c.CacheGet(f.c.ctx, f.f, f.url)
+	f.contentType = contentType
 	if err != nil {
 		f.err = err
 		close(f.done)
@@ -154,7 +156,9 @@ func (f *fetcher) saveToCache() {
 		return // cache disabled
 	}
 
-	f.err = f.c.CachePut(f.c.ctx, f.url, io.NewSectionReader(f.f, 0, f.f.Size()), f.f.Size())
+	size := f.f.Size()
+	r := io.NewSectionReader(f.f, 0, size)
+	f.err = f.c.CachePut(f.c.ctx, f.url, f.contentType, r, size)
 }
 
 func (f *fetcher) fetch(req *http.Request) {
@@ -190,6 +194,7 @@ func (f *fetcher) fetch(req *http.Request) {
 	}
 
 	if f.err == nil && f.res.StatusCode == 200 {
+		f.contentType = f.res.Header.Get("Content-Type")
 		f.saveToCache()
 	}
 	close(f.done)
@@ -209,6 +214,11 @@ func (f *fetcher) response(req *http.Request) (*http.Response, error) {
 	var res http.Response
 	if f.res == nil {
 		// cache hit, fake a http.Response
+		if f.contentType != "" {
+			res.Header = make(http.Header)
+			res.Header.Add("Content-Type", f.contentType)
+		}
+		res.StatusCode = 200
 	} else {
 		res = *f.res
 	}
