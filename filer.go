@@ -18,6 +18,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"sync"
 	"syscall"
@@ -25,8 +26,13 @@ import (
 )
 
 // A Filer creates files, managing load on file descriptors.
+//
+// Exported fields can only be modified after NewFiler is called
+// and before any methods are called.
 type Filer struct {
 	DefaultBufferMemSize int // default value: 64kb
+
+	Logf func(format string, v ...interface{}) // used to report open files at Shutdown
 
 	tempdir string
 
@@ -73,17 +79,11 @@ func (f *Filer) SetTempdir(tempdir string) {
 // It is similar to os.Open except it will block if Filer has exhasted
 // its file descriptors until one is available.
 func (f *Filer) Open(name string) (*File, error) {
-	file := f.newFile()
-	if file == nil {
-		return nil, context.Canceled
+	file, err := f.openFile(name, os.O_RDONLY, 0)
+	if file != nil {
+		file.pcN = runtime.Callers(0, file.pc[:])
 	}
-	osfile, err := os.Open(name)
-	if err != nil {
-		file.remove()
-		return nil, err
-	}
-	file.File = osfile
-	return file, nil
+	return file, err
 }
 
 // OpenFile is a generalized file open method.
@@ -91,6 +91,14 @@ func (f *Filer) Open(name string) (*File, error) {
 // It is similar to os.OpenFile except it will block if Filer has exhasted
 // its file descriptors until one is available.
 func (f *Filer) OpenFile(name string, flag int, perm os.FileMode) (*File, error) {
+	file, err := f.openFile(name, flag, perm)
+	if file != nil {
+		file.pcN = runtime.Callers(0, file.pc[:])
+	}
+	return file, err
+}
+
+func (f *Filer) openFile(name string, flag int, perm os.FileMode) (*File, error) {
 	file := f.newFile()
 	if file == nil {
 		return nil, context.Canceled
@@ -105,31 +113,22 @@ func (f *Filer) OpenFile(name string, flag int, perm os.FileMode) (*File, error)
 }
 
 func (f *Filer) TempFile(dir, prefix, suffix string) (file *File, err error) {
-	file = f.newFile()
-	if file == nil {
-		return nil, context.Canceled
-	}
-
 	if dir == "" {
 		dir = f.tempdir
 	}
-
-	var osfile *os.File
 	for i := 0; i < 1000; i++ {
 		name := filepath.Join(dir, prefix+f.rand()+suffix)
-		osfile, err = os.OpenFile(name, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0600)
+		file, err = f.openFile(name, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0600)
 		if os.IsExist(err) {
 			continue
 		}
 		break
 	}
-	if err != nil {
-		file.remove()
-		return nil, err
+	if file != nil {
+		file.pcN = runtime.Callers(0, file.pc[:])
+		file.isTemp = true
 	}
-	file.File = osfile
-	file.isTemp = true
-	return file, nil
+	return file, err
 }
 
 // Shutdown gracefully shuts down the Filer.
@@ -154,11 +153,19 @@ func (f *Filer) Shutdown(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			for file := range f.files {
+				if f.Logf != nil {
+					f.Logf("iox.Filer.Shutdown: closing file created by %s: %s", file.creator(), file.File.Name())
+				}
 				file.File.Close()
 				delete(f.files, file)
 			}
 			// now len(f.files) == 0
 		default:
+			if f.Logf != nil {
+				for file := range f.files {
+					f.Logf("iox.Filer.Shutdown: waiting for file created by %s: %s", file.creator(), file.File.Name())
+				}
+			}
 		}
 		if len(f.files) == 0 {
 			break
@@ -216,6 +223,10 @@ type File struct {
 
 	filer  *Filer
 	isTemp bool
+
+	// runtime.Callers where the File was created
+	pc  [3]uintptr
+	pcN int
 }
 
 func (file *File) remove() {
@@ -240,4 +251,19 @@ func (file *File) Close() error {
 		}
 	}
 	return err
+}
+
+func (file *File) creator() string {
+	if file.pcN > 0 {
+		frames := runtime.CallersFrames(file.pc[:file.pcN])
+		if _, more := frames.Next(); more { // runtime.Callers
+			if _, more := frames.Next(); more { // filer.<exported function>
+				frame, _ := frames.Next() // caller we care about
+				if frame.Function != "" {
+					return frame.Function
+				}
+			}
+		}
+	}
+	return "<unknown>"
 }

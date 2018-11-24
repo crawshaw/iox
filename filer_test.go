@@ -15,9 +15,12 @@
 package iox
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -131,36 +134,97 @@ func TestFilerShutdownClean(t *testing.T) {
 	}
 }
 
+func openAndCloseTempFile(filer *Filer) error {
+	f, err := filer.TempFile("", "temp-file-opened-and-closed", "")
+	if f != nil {
+		err = f.Close()
+	}
+	return err
+}
+func openATempFile(filer *Filer) (*File, error) { return filer.TempFile("", "a-temp-file", "") }
+func openBufferFile1(filer *Filer) *BufferFile  { return filer.BufferFile(1) }
+func openBufferFile2(filer *Filer) *BufferFile  { return filer.BufferFile(1) }
+
 func TestFilerShutdownForced(t *testing.T) {
-	filer := NewFiler(2)
+	buf := new(bytes.Buffer)
+	bufLogf := func(format string, v ...interface{}) {
+		fmt.Fprintf(buf, format, v...)
+		buf.WriteByte('\n')
+	}
+
+	filer := NewFiler(3) // f1, f2, bf2
+	filer.Logf = bufLogf
 	f1, err := filer.TempFile("", "testfile1", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	f2, err := filer.TempFile("", "testfile2", "")
+	f2, err := openATempFile(filer)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	f3ch := make(chan error)
+	if err := openAndCloseTempFile(filer); err != nil {
+		t.Fatal(err)
+	}
+
+	bf1 := openBufferFile1(filer)
+	defer bf1.Close()
+
+	bf2 := openBufferFile2(filer)
+	if _, err := bf2.Write([]byte{'a'}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bf2.Write([]byte{'b'}); err != nil { // bf2 file created here
+		t.Fatal(err)
+	}
+
+	time.Sleep(10 * time.Millisecond)
+
+	errCh := make(chan error)
+	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
-		f3, err := filer.TempFile("", "testfile3", "")
-		if f3 != nil {
-			f3.Close()
-		}
-		f3ch <- err
+		errCh <- filer.Shutdown(ctx)
 	}()
 
 	time.Sleep(10 * time.Millisecond)
-	ctx, cancel := context.WithCancel(context.Background())
+	if _, err := filer.TempFile("", "canceled file", ""); err != context.Canceled {
+		t.Errorf("TempFile opened after Shutdown reports err %v, want context.Canceled", err)
+	}
+
 	cancel()
-	if err := filer.Shutdown(ctx); err != context.Canceled {
+	if err := <-errCh; err != context.Canceled {
 		t.Errorf("filer.Shutdown(ctx)=%v, want context.Canceled", err)
 	}
 
 	_ = f2
 	if err := underlyingError(f1.Close()); err != os.ErrClosed {
 		t.Errorf("f1.Close()=%v, want os.ErrClosed", err)
+	}
+
+	log := buf.String()
+	if strings.Contains(log, "openAndCloseTempFile") {
+		t.Error("log mentions file from openAndCloseTempFile that should already be closed")
+	}
+	if strings.Contains(log, "openBufferFile1") {
+		t.Error("log mentions BufferFile1, which should never grab resources")
+	}
+	if !strings.Contains(log, "openBufferFile2") {
+		t.Error("log does not mention BufferFile2, which hold resources")
+	}
+	if !regexp.MustCompile(`waiting for [^\n]*iox.TestFilerShutdownForced`).MatchString(log) {
+		t.Error("log does not metion waiting for file from TestFilerShutdownForced")
+	}
+	if !regexp.MustCompile(`waiting for [^\n]*iox.openATempFile`).MatchString(log) {
+		t.Error("log does not metion waiting for file from openATempFile")
+	}
+	if !regexp.MustCompile(`closing file [^\n]*iox.TestFilerShutdownForced`).MatchString(log) {
+		t.Errorf("log does not metion closing file from TestFilerShutdownForced")
+	}
+	if !regexp.MustCompile(`closing file [^\n]*iox.openATempFile`).MatchString(log) {
+		t.Errorf("log does not metion closing file from openATempFile")
+	}
+	if t.Failed() {
+		t.Logf("filer log:\n%s", log)
 	}
 }
 

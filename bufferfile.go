@@ -18,11 +18,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 )
 
 // BufferFile creates a buffered file with up to memSize bytes stored in memory.
 //
-// If memSize is zero, a default value is chosen.
+// If memSize is zero, the Filer's default value is used.
 //
 // The underlying file descriptor should not be handled directly as the
 // fraction of the contents stored in the OS file may change.
@@ -33,10 +34,12 @@ func (f *Filer) BufferFile(memSize int) *BufferFile {
 	if memSize == 0 {
 		memSize = f.DefaultBufferMemSize
 	}
-	return &BufferFile{
+	bf := &BufferFile{
 		filer:  f,
 		bufMax: memSize,
 	}
+	bf.pcN = runtime.Callers(0, bf.pc[:])
+	return bf
 }
 
 // BufferFile is a temporary file that stores its first N bytes in memory.
@@ -60,11 +63,19 @@ type BufferFile struct {
 	flen   int64 // current length of f
 
 	off int64 // kept in sync with pos in *File
+
+	// caller stack at creation
+	pc  [3]uintptr
+	pcN int
 }
 
 func (bf *BufferFile) ensureFile() error {
 	if bf.f == nil {
 		bf.f, bf.err = bf.filer.TempFile("", "bufferfile-", "")
+		if bf.f != nil {
+			bf.f.pcN = bf.pcN
+			bf.f.pc = bf.pc
+		}
 	}
 	return bf.err
 }
